@@ -1,6 +1,7 @@
 import { makeWASocket, useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
-import qrcode from 'qrcode-terminal';
+import qrcode from 'qrcode-terminal'; // Mantemos, mas não será usado para a conexão principal
 import { pool, testConnection } from './db.js';
+import 'dotenv/config';
 
 // Testa a conexão com o banco antes de iniciar o bot
 await testConnection();
@@ -11,13 +12,27 @@ async function connectToWhatsApp() {
     
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: true
+        printQRInTerminal: false // Desativamos o QR Code no terminal
     });
 
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr, pairingCode } = update;
+        
+        // --- NOVA LÓGICA PARA CÓDIGO DE PAREAMENTO ---
+        if (pairingCode) {
+            // Pega o número de telefone do .env e formata
+            const phoneNumber = process.env.SEU_NUMERO_WHATSAPP.replace(/[^0-9]/g, '');
+            console.log(`\n----- CÓDIGO DE PAREAMENTO -----\n`);
+            console.log(`Para conectar, use o número ${phoneNumber} no WhatsApp.`);
+            console.log(`Seu código de pareamento é: ${pairingCode}`);
+            console.log(`\n-------------------------------\n`);
+        }
+        // -------------------------------------------
+
         if (qr) {
+            // Este bloco não será mais usado, mas é bom manter como fallback
             console.log('\n\n----- QR Code para Conexão -----\n');
+            qrcode.generate(qr, { small: true });
         }
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -37,10 +52,10 @@ async function connectToWhatsApp() {
     sock.ev.on('creds.update', saveCreds);
 }
 
+// O resto do seu código (verificarEEnviarNotificacoes, etc.) permanece o mesmo...
 async function verificarEEnviarNotificacoes(sock) {
     console.log(`[${new Date().toLocaleString()}] Verificando agendamentos pendentes...`);
     try {
-        // A mágica acontece aqui: query direta no banco!
         const [agendamentos] = await pool.execute(`
             SELECT 
                 a.id,
@@ -95,7 +110,6 @@ async function processarAgendamento(sock, agendamento) {
         await sock.sendMessage(numeroWhatsapp, { text: mensagem });
         console.log(`✅ Mensagem enviada para ${cliente_nome} (${numeroWhatsapp})`);
 
-        // Confirma o envio inserindo no banco
         await pool.execute(
             "INSERT INTO whatsapp_notificacoes (agendamento_id, enviado, enviado_em) VALUES (?, 1, NOW()) ON DUPLICATE KEY UPDATE enviado = 1, enviado_em = NOW()",
             [id]
@@ -110,7 +124,7 @@ async function processarAgendamento(sock, agendamento) {
 function iniciarVerificacaoPeriodica(sock) {
     setInterval(() => {
         verificarEEnviarNotificacoes(sock);
-    }, 5 * 60 * 1000); // 5 minutos
+    }, 5 * 60 * 1000);
 }
 
 // Inicia o processo de conexão
